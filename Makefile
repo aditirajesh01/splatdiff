@@ -1,4 +1,4 @@
-DEFAULT_GOAL:=help
+.DEFAULT_GOAL := help
 
 OS := $(shell uname -s)
 ARCH := $(shell uname -m)
@@ -10,7 +10,7 @@ dev:
 
 .PHONY: run
 run:						## Run local application
-	@./playground.app
+	@./splatdiff
 
 .PHONY: build
 build:							## build 
@@ -19,8 +19,8 @@ build:							## build
 	@cd build && cmake .. && make
 
 .PHONY: test
-test: build						## Run tests (currently just build)
-	@echo "All tests passed!"
+test: build						## Build and run the SplatDiff unit tests
+	@./build/splatdiff_tests
 
 .PHONY: lint
 lint:							## Run clang-format check

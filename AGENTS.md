@@ -9,7 +9,7 @@ The project uses **Nix** for environment orchestration and **CMake** with a **Ma
 ### 🚀 Development Workflow
 1.  **Enter Environment:** Use `nix develop` or `direnv` to activate the development shell.
 2.  **Build:** `make build` - Executes CMake and compiles the project in the `build/` directory.
-3.  **Run:** `make run` - Executes the binary `./playground.app`.
+3.  **Run:** `make run` - Executes the binary `./splatdiff`.
 4.  **Dev Loop:** `make dev` - Combines build and run.
 5.  **Clean:** `make clean` - Removes the `build/` directory and compiled binaries.
 

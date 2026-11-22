@@ -59,3 +59,8 @@ assets/**
 
 # imgui
 imgui.ini
+shot*.png
+shot*.ppm
+splatdiff
+shot_*.png
+assets/scanB*
