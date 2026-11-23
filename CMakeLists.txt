@@ -33,7 +33,8 @@ set(IMGUI_SOURCES
 )
 
 file(GLOB SOURCES src/*.cpp)
-list(REMOVE_ITEM SOURCES ${CMAKE_SOURCE_DIR}/src/SceneEdit.cpp ${CMAKE_SOURCE_DIR}/src/ChangeDetect.cpp)
+list(REMOVE_ITEM SOURCES ${CMAKE_SOURCE_DIR}/src/SceneEdit.cpp ${CMAKE_SOURCE_DIR}/src/ChangeDetect.cpp
+     ${CMAKE_SOURCE_DIR}/src/StereoMath.cpp ${CMAKE_SOURCE_DIR}/src/Experiments.cpp)
 
 # OpenMP. Apple clang has no OpenMP of its own: use the libomp runtime that ships with Homebrew's llvm
 # (or the separate libomp formula). Only omp.h is copied into the build tree so llvm's other clang
@@ -54,7 +55,8 @@ endif()
 find_package(OpenMP COMPONENTS CXX)
 
 # SplatDiff core: scene editing + PLY I/O, no OpenGL (shared by the viewer, CLI tool and tests)
-add_library(splatdiff_core STATIC src/SceneEdit.cpp src/ChangeDetect.cpp)
+add_library(splatdiff_core STATIC src/SceneEdit.cpp src/ChangeDetect.cpp src/StereoMath.cpp
+            src/Experiments.cpp)
 target_include_directories(splatdiff_core PUBLIC include)
 target_link_libraries(splatdiff_core PUBLIC glm::glm nlohmann_json::nlohmann_json)
 target_compile_definitions(splatdiff_core PUBLIC GLM_ENABLE_EXPERIMENTAL)
@@ -63,6 +65,10 @@ if(OpenMP_CXX_FOUND)
 else()
   message(WARNING "OpenMP not found: SplatDiff parallel modes will run serially")
 endif()
+
+add_executable(splatdiff_experiments tools/splatdiff_experiments.cpp)
+target_link_libraries(splatdiff_experiments splatdiff_core)
+set_target_properties(splatdiff_experiments PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_executable(splatdiff_detect tools/splatdiff_detect.cpp)
 target_link_libraries(splatdiff_detect splatdiff_core)

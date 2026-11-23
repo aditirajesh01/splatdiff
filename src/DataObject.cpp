@@ -72,8 +72,16 @@ void Mesh::del() {
   ebo.del();
 }
 
+void GaussianSplat::setTags(const std::vector<float>& tags) {
+  std::vector<float> data = tags;
+  data.resize(spheres.size(), 0.0f);
+  tagVbo.bind();
+  glBufferData(GL_ARRAY_BUFFER, sizeof(float) * data.size(), data.data(), GL_DYNAMIC_DRAW);
+  tagVbo.unbind();
+}
+
 GaussianSplat::GaussianSplat(const std::vector<GaussianSphere>& spheres)
-    : vao(), vbo(spheres), ebo(), spheres(spheres) {
+    : vao(), vbo(spheres), ebo(), spheres(spheres), tagVbo(std::vector<float>(spheres.size(), 0.0f)) {
   std::vector<GLuint> indices(spheres.size());
   vao.bind();
   ebo.bind();
@@ -84,6 +92,7 @@ GaussianSplat::GaussianSplat(const std::vector<GaussianSphere>& spheres)
   vao.linkAttr(vbo, 2, 1, GL_FLOAT, sizeof(GaussianSphere), (void*)offsetof(GaussianSphere, opacity));
   vao.linkAttr(vbo, 3, 3, GL_FLOAT, sizeof(GaussianSphere), (void*)offsetof(GaussianSphere, covA));
   vao.linkAttr(vbo, 4, 3, GL_FLOAT, sizeof(GaussianSphere), (void*)offsetof(GaussianSphere, covB));
+  vao.linkAttr(tagVbo, 5, 1, GL_FLOAT, sizeof(float), (void*)0);
 
   vao.unbind();
 }
@@ -92,12 +101,14 @@ GaussianSplat::~GaussianSplat() {
   vao.del();
   vbo.del();
   ebo.del();
+  tagVbo.del();
 }
 
 void GaussianSplat::upload() {
   vbo.bind();
   glBufferData(GL_ARRAY_BUFFER, sizeof(GaussianSphere) * spheres.size(), spheres.data(), GL_DYNAMIC_DRAW);
   vbo.unbind();
+  setTags({});  // sizes changed: tags are stale until the next detection
   std::vector<GLuint> indices(spheres.size());
   for (size_t i = 0; i < indices.size(); ++i) indices[i] = i;
   vao.bind();

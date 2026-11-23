@@ -64,3 +64,4 @@ shot*.ppm
 splatdiff
 shot_*.png
 assets/scanB*
+.DS_Store

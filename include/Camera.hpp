@@ -13,12 +13,13 @@ class CameraEventListener {
  public:
   std::function<void(SDL_Keycode)> onKeyDownCallback;
   std::function<void(SDL_Keycode)> onKeyUpCallback;
-  std::function<void(SDL_Event &)> onMouseLeftPressCallback;
+  std::function<void(SDL_Event&)> onMouseLeftPressCallback;
   std::function<void()> onMouseLeftReleaseCallback;
   virtual void onKeyDown(SDL_Keycode key) = 0;
   virtual void onKeyUp(SDL_Keycode key) = 0;
-  virtual void onMouseLeftPress(SDL_Event &event) = 0;
+  virtual void onMouseLeftPress(SDL_Event& event) = 0;
   virtual void onMouseLeftRelease() = 0;
+  virtual ~CameraEventListener() = default;
 };
 
 enum CameraMovement {
@@ -50,9 +51,15 @@ class Camera {
   void lookAroundStart(float x, float y);
   void lookAroundEnd();
   void moveCamera();
-  void setEventListener(CameraEventListener *listener);
-  void handle(SDL_Event &event);
-  void update(Shader *shaderProgram);
+  void setEventListener(CameraEventListener* listener);
+  void handle(SDL_Event& event);
+  void update(Shader* shaderProgram);
+
+  // read-only projection settings (used by the SplatDiff stereo renderer)
+  float fovDegrees() const { return fov; }
+  float nearZ() const { return nearPlane; }
+  float farZ() const { return farPlane; }
+  glm::vec3 upVector() const { return up; }
 
   std::unordered_map<int, bool> keyState;
   bool relativeMouseMode = false;  // FPS mode
@@ -66,7 +73,7 @@ class Camera {
   float nearPlane = 0.1f;
   float farPlane = 300.0f;
 
-  CameraEventListener *listener;
+  CameraEventListener* listener;
 
   bool firstClick = true;
   float normalSpeed = 0.1f;
@@ -77,12 +84,12 @@ class Camera {
 
 class GhostCameraListener : public CameraEventListener {
  public:
-  GhostCameraListener(Camera *camera);
+  GhostCameraListener(Camera* camera);
   void onKeyDown(SDL_Keycode key);
   void onKeyUp(SDL_Keycode key);
-  void onMouseLeftPress(SDL_Event &event);
+  void onMouseLeftPress(SDL_Event& event);
   void onMouseLeftRelease();
 
  private:
-  Camera *camera;
+  Camera* camera;
 };

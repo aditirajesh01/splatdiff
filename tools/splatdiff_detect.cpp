@@ -1,6 +1,6 @@
 // splatdiff_detect: detect what changed between two Gaussian scans.
 //
-//   splatdiff_detect A.ply B.ply [--res N] [--tau T] [--tol R] [--min V] [--density] [--no-aa]
+//   splatdiff_detect A.ply B.ply [--res N] [--tau T] [--tol R] [--min V] [--density] [--filter clamp|dilate|mass|none]
 //                    [--mode serial|atomic|private] [--gt B.edits.json] [--bench] [--csv results.csv]
 //
 // --gt     evaluate against a ground-truth edit log (default: B.edits.json next to B.ply, if present)
@@ -18,7 +18,8 @@
 using namespace splatdiff;
 
 static void usage() {
-  std::cerr << "usage: splatdiff_detect A.ply B.ply [--res N] [--tau T] [--tol R] [--min V] [--density] [--no-aa]\n"
+  std::cerr << "usage: splatdiff_detect A.ply B.ply [--res N] [--tau T] [--tol R] [--min V] [--density] [--filter "
+               "clamp|dilate|mass|none]\n"
                "                        [--mode serial|atomic|private] [--gt edits.json] [--bench] [--csv file]\n";
   std::exit(2);
 }
@@ -40,9 +41,9 @@ static void printResult(const DetectResult& r) {
 static void printTimings(const DetectResult& r) {
   const auto& t = r.timings;
   std::printf(
-      "%-24s threads %d | splat A %8.1f ms | splat B %8.1f ms | compare %6.1f ms | regions %6.1f ms | "
+      "%-24s threads %d | setup %5.1f ms | splat A %8.1f ms | splat B %8.1f ms | compare %6.1f ms | regions %6.1f ms | "
       "total %8.1f ms\n",
-      execModeName(r.params.mode), t.threads, t.splatA, t.splatB, t.compare, t.regions, t.total);
+      execModeName(r.params.mode), t.threads, t.setup, t.splatA, t.splatB, t.compare, t.regions, t.total);
 }
 
 int main(int argc, char** argv) {
@@ -66,9 +67,13 @@ int main(int argc, char** argv) {
       p.minVoxels = std::atoi(next());
     else if (o == "--density")
       p.occupancy = false;
-    else if (o == "--no-aa")
-      p.antiAlias = false;
-    else if (o == "--gt")
+    else if (o == "--filter") {
+      std::string f = next();
+      p.filter = f == "none"     ? FilterMode::None
+                 : f == "dilate" ? FilterMode::Dilate
+                 : f == "mass"   ? FilterMode::Mass
+                                 : FilterMode::Clamp;
+    } else if (o == "--gt")
       gtPath = next();
     else if (o == "--csv")
       csvPath = next();
@@ -87,9 +92,9 @@ int main(int argc, char** argv) {
 
   Gaussians a = loadPly(aPath), b = loadPly(bPath);
   std::printf("A: %zu gaussians (%s)\nB: %zu gaussians (%s)\n", a.size(), aPath.c_str(), b.size(), bPath.c_str());
-  std::printf("params: res %d, tau %.2f, tolerance %d, min %d voxels, %s, anti-alias %s, OpenMP threads %d\n",
-              p.resolution, p.tau, p.tolerance, p.minVoxels, p.occupancy ? "occupancy" : "density",
-              p.antiAlias ? "on" : "off", maxThreads());
+  std::printf("params: res %d, tau %.2f, tolerance %d, min %d voxels, %s, filter %s, OpenMP threads %d\n", p.resolution,
+              p.tau, p.tolerance, p.minVoxels, p.occupancy ? "occupancy" : "density", filterModeName(p.filter),
+              maxThreads());
 
   std::vector<DetectResult> runs;
   if (bench) {

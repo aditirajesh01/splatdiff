@@ -29,12 +29,22 @@ struct SplatShape {
 bool prepare(const GaussianSphere& g, const DetectParams& p, float voxel, SplatShape& out) {
   glm::mat3 cov = covariance(g);
   float amp = g.opacity;
-  if (p.antiAlias) {
-    float s = 0.5f * voxel;  // filter std-dev: half a voxel
-    glm::mat3 filtered = cov + glm::mat3(s * s);
-    float d0 = glm::determinant(cov), d1 = glm::determinant(filtered);
-    amp *= std::sqrt(std::max(d0, 0.0f) / d1);
-    cov = filtered;
+  const float s = 0.5f * voxel;  // filter std-dev: half a voxel
+  switch (p.filter) {
+    case FilterMode::None:
+      break;
+    case FilterMode::Clamp:
+      cov = clampCovariance(cov, s * s);
+      break;
+    case FilterMode::Dilate:
+      cov += glm::mat3(s * s);
+      break;
+    case FilterMode::Mass: {
+      glm::mat3 filtered = cov + glm::mat3(s * s);
+      amp *= std::sqrt(std::max(glm::determinant(cov), 0.0f) / glm::determinant(filtered));
+      cov = filtered;
+      break;
+    }
   }
   float det = glm::determinant(cov);
   if (!(det > 1e-30f) || !(amp > 1e-6f)) return false;
@@ -78,7 +88,8 @@ std::vector<float> maxFilter(const std::vector<float>& in, const GridSpec& g, in
   std::vector<float> a = in, b(in.size());
   const glm::ivec3 D = g.dims;
   for (int axis = 0; axis < 3; ++axis) {
-#pragma omp parallel for collapse(2) schedule(static)
+// dynamic: macOS gives the 4 efficiency cores equal static shares, so everyone waits for them
+#pragma omp parallel for collapse(2) schedule(dynamic, 16)
     for (int z = 0; z < D.z; ++z)
       for (int y = 0; y < D.y; ++y)
         for (int x = 0; x < D.x; ++x) {
@@ -116,6 +127,20 @@ bool boxesTouch(const glm::vec3& amin, const glm::vec3& amax, const glm::vec3& b
 
 }  // namespace
 
+const char* filterModeName(FilterMode f) {
+  switch (f) {
+    case FilterMode::None:
+      return "none";
+    case FilterMode::Clamp:
+      return "clamp";
+    case FilterMode::Dilate:
+      return "dilate";
+    case FilterMode::Mass:
+      return "mass-preserving";
+  }
+  return "?";
+}
+
 const char* execModeName(ExecMode m) {
   switch (m) {
     case ExecMode::Serial:
@@ -138,20 +163,25 @@ int maxThreads() {
 
 GridSpec makeGrid(const Gaussians& a, const Gaussians& b, int resolution, float boundsPercentile) {
   glm::vec3 lo(0.0f), hi(1.0f);
-  std::vector<float> coord;
-  coord.reserve(a.size() + b.size());
-  for (int axis = 0; axis < 3; ++axis) {
-    coord.clear();
-    for (const auto& g : a) coord.push_back(g.position[axis]);
-    for (const auto& g : b) coord.push_back(g.position[axis]);
-    if (coord.empty()) break;
-    size_t n = coord.size();
-    size_t iLo = size_t(double(n - 1) * boundsPercentile / 100.0);
-    size_t iHi = size_t(double(n - 1) * (1.0 - boundsPercentile / 100.0));
-    std::nth_element(coord.begin(), coord.begin() + iLo, coord.end());
-    lo[axis] = coord[iLo];
-    std::nth_element(coord.begin(), coord.begin() + iHi, coord.end());
-    hi[axis] = coord[iHi];
+  const size_t total = a.size() + b.size();
+  const size_t kMaxSamples = size_t(1) << 15;
+  const size_t stride = std::max<size_t>(1, (total + kMaxSamples - 1) / kMaxSamples);
+  if (total > 0) {
+    // one axis per thread (at most 3; respects serial mode's single thread); each keeps its own samples
+#pragma omp parallel for schedule(static, 1)
+    for (int axis = 0; axis < 3; ++axis) {
+      std::vector<float> coord;
+      coord.reserve(total / stride + 2);
+      for (size_t i = 0; i < a.size(); i += stride) coord.push_back(a[i].position[axis]);
+      for (size_t i = 0; i < b.size(); i += stride) coord.push_back(b[i].position[axis]);
+      size_t n = coord.size();
+      size_t iLo = size_t(double(n - 1) * boundsPercentile / 100.0);
+      size_t iHi = size_t(double(n - 1) * (1.0 - boundsPercentile / 100.0));
+      std::nth_element(coord.begin(), coord.begin() + iLo, coord.end());
+      lo[axis] = coord[iLo];
+      std::nth_element(coord.begin() + iLo, coord.begin() + iHi, coord.end());  // iHi >= iLo
+      hi[axis] = coord[iHi];
+    }
   }
   glm::vec3 extent = glm::max(hi - lo, glm::vec3(1e-3f));
   float pad = 0.05f * std::max(extent.x, std::max(extent.y, extent.z));
@@ -195,7 +225,7 @@ double splatField(const Gaussians& gs, const GridSpec& grid, const DetectParams&
         for (long i = 0; i < count; ++i) splatOne(gs[i], grid, p, local[t].data(), false);
       }
       // parallel reduction over voxels
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(dynamic, 32768)
       for (long v = 0; v < long(n); ++v) {
         float sum = 0.0f;
         for (const auto& l : local)
@@ -207,7 +237,7 @@ double splatField(const Gaussians& gs, const GridSpec& grid, const DetectParams&
   }
 
   if (p.occupancy) {
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(dynamic, 32768)
     for (long v = 0; v < long(n); ++v) field[v] = 1.0f - std::exp(-field[v]);
   }
   return msSince(t0);
@@ -217,8 +247,18 @@ DetectResult detectChanges(const Gaussians& a, const Gaussians& b, const DetectP
   auto tStart = Clock::now();
   DetectResult r;
   r.params = p;
+#ifdef _OPENMP
+  const int previousThreads = omp_get_max_threads();
+  // serial mode must be serial end to end (compare and region kernels too), or the baseline is not a baseline
+  if (p.mode == ExecMode::Serial)
+    omp_set_num_threads(1);
+  else if (p.threads > 0)
+    omp_set_num_threads(p.threads);
+#endif
   r.timings.threads = (p.mode == ExecMode::Serial) ? 1 : maxThreads();
+  auto tSetup = Clock::now();
   r.grid = makeGrid(a, b, p.resolution, p.boundsPercentile);
+  r.timings.setup = msSince(tSetup);
   const GridSpec& g = r.grid;
   const size_t n = g.count();
 
@@ -233,7 +273,7 @@ DetectResult detectChanges(const Gaussians& a, const Gaussians& b, const DetectP
   r.label.assign(n, 0);
   long changed = 0, occupied = 0;
   const float occupiedLevel = p.occupancy ? 0.5f : 0.7f;
-#pragma omp parallel for schedule(static) reduction(+ : changed, occupied)
+#pragma omp parallel for schedule(dynamic, 32768) reduction(+ : changed, occupied)
   for (long v = 0; v < long(n); ++v) {
     float oa = r.fieldA[v], ob = r.fieldB[v];
     int8_t l = 0;
@@ -289,6 +329,7 @@ DetectResult detectChanges(const Gaussians& a, const Gaussians& b, const DetectP
     reg.centroid = g.origin + (sum / float(reg.voxels) + 0.5f) * g.voxel;
     float addFrac = float(reg.addedVoxels) / reg.voxels;
     reg.type = addFrac > 0.9f ? "added" : (addFrac < 0.1f ? "removed" : "changed");
+    reg.componentId = id;
     r.regions.push_back(reg);
     members.push_back(queue);
   }
@@ -344,8 +385,19 @@ DetectResult detectChanges(const Gaussians& a, const Gaussians& b, const DetectP
     rem.type = "moved (from)";
     add.type = "moved (to)";
   }
+  // per-voxel region index (after filtering and sorting), used to tag Gaussians in the viewer
+  std::vector<int> newIndex(members.size(), -1);
+  for (size_t i = 0; i < r.regions.size(); ++i) newIndex[r.regions[i].componentId] = int(i);
+  r.regionId.assign(n, -1);
+#pragma omp parallel for schedule(dynamic, 32768)
+  for (long v = 0; v < long(n); ++v)
+    if (comp[v] >= 0) r.regionId[v] = newIndex[comp[v]];
+
   r.timings.regions = msSince(t0);
   r.timings.total = msSince(tStart);
+#ifdef _OPENMP
+  omp_set_num_threads(previousThreads);
+#endif
   return r;
 }
 

@@ -39,8 +39,8 @@ ablate() {
   $D $A $OUT/rescan_all.ply "$@" | grep -E "^grid" | sed 's/.*occupied, //' | tr '\n' ' '
   $D $A $OUT/real_edits.ply "$@" | grep detected
 }
-ablate "density, no anti-alias, no tolerance" --density --no-aa --tol 0
-ablate "+ anti-alias"                       --density --tol 0
+ablate "density, no filter, no tolerance"     --density --filter none --tol 0
+ablate "+ clamp filter"                     --density --tol 0
 ablate "+ occupancy"                        --tol 0
 ablate "+ 1-voxel tolerance (default)"
 
@@ -49,3 +49,8 @@ for r in 64 128 256; do
   $D $A $OUT/real_edits.ply --res $r --bench --csv $OUT/bench.csv | grep -E "speedup"
 done
 echo "results: $OUT/results.csv, $OUT/bench.csv"
+
+echo "== full experiment suite + figures"
+./build/splatdiff_experiments $A --out assets/experiments > assets/experiments/summary.txt || true
+grep -E "passed" assets/experiments/summary.txt
+python3 tools/plot_results.py assets/experiments

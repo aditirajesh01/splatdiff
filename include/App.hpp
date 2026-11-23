@@ -12,8 +12,11 @@
 #include "Camera.hpp"
 #include "ChangeDetect.hpp"
 #include "DataObject.hpp"
+#include "Experiments.hpp"
 #include "SceneEdit.hpp"
 #include "ShaderClass.hpp"
+#include "Stereo.hpp"
+#include "VolumeView.hpp"
 
 class App {
  public:
@@ -29,6 +32,26 @@ class App {
   void setShowB(bool show);
   bool isShowingB() const { return showB; }
   void runDetection();
+  bool isSplitView() const { return splitView; }
+  float getSplitFraction() const { return dividerFraction; }
+  // view options, also settable from the command line
+  void setSliceView(bool on, int axis, float position) {
+    showSlice = on, sliceAxis = axis, slicePosition = position;
+    if (detection && volumeView) volumeView->updateSlice(*detection, sliceAxis, slicePosition);
+  }
+  StereoSettings& stereoSettings() { return stereo; }
+  void runExperimentCases();
+  void showExperimentCase(size_t index);
+  void showExperimentCase(const std::string& name) {
+    for (size_t i = 0; i < expCases.size(); ++i)
+      if (expCases[i].name == name) showExperimentCase(i);
+  }
+  bool isUiHidden() const { return uiHidden; }
+  void toggleUi() { uiHidden = !uiHidden; }
+  void setViewOptions(bool overlayOn, bool dim, bool split, bool volume, bool volumeOnlyOn) {
+    overlay = overlayOn, dimUnchanged = dim, splitView = split, showVolume = volume, volumeOnly = volumeOnlyOn;
+    sortVisible();
+  }
   void setCamera(const glm::vec3& position, const glm::vec3& lookAt);
   void setSelectionBoxVisible(bool visible) { showSelectionBox = visible; }
 
@@ -112,6 +135,47 @@ class App {
   bool showGroundTruth = false;
   std::string benchmarkReport;
   std::unique_ptr<Mesh> edgeMesh;  // 12 box edges, drawn with GL_LINES
+
+  // views (milestone 3)
+  bool overlay = true;
+  bool dimUnchanged = false;
+  bool splitView = false;
+  float dividerFraction = 0.5f;  // before/after divider, fraction of the window width
+  bool draggingSplit = false;
+  bool showVolume = false;
+  bool volumeOnly = false;
+  bool showSlice = false;
+  int sliceAxis = 1;
+  float slicePosition = 0.3f;
+  std::unique_ptr<VolumeView> volumeView;
+  // One rendered viewpoint: the normal camera, or one eye of the stereo pair.
+  struct RenderView {
+    glm::mat4 view{1.0f};
+    glm::mat4 proj{1.0f};
+    glm::ivec2 size{1, 1};  // viewport size in pixels
+  };
+  RenderView currentView;
+  RenderView mainView() const;
+  void applyView(Shader* shader) const;   // viewMatrix + camMatrix uniforms from currentView
+  void renderScene(const RenderView& v);  // splats, change volume, region boxes
+  void drawSplats(GaussianSplat* scene);
+
+  // experiments (milestone 5)
+  std::vector<splatdiff::ExperimentCase> expCases;
+  std::vector<splatdiff::ExperimentRow> expRows;
+  std::vector<splatdiff::SweepPoint> expTau, expThreads;
+  int expSeed = 7;
+  std::string expStatus;
+  void runTauSweep();
+  void runThreadSweep();
+  void exportExperiments();
+
+  // stereo / VR (milestone 4)
+  StereoSettings stereo;
+  bool uiHidden = false;  // H: clean screen for the VR / stereo demo
+  std::unique_ptr<StereoRenderer> stereoRenderer;
+  void sortVisible();
+  void updateChangeTags();
   void drawBoxEdges(const glm::vec3& mn, const glm::vec3& mx, const glm::vec3& colour);
   void runBenchmark();
 

@@ -25,6 +25,9 @@ enum class ExecMode {
 const char* execModeName(ExecMode m);
 int maxThreads();  // OpenMP threads available (1 if built without OpenMP)
 
+enum class FilterMode { None = 0, Clamp = 1, Dilate = 2, Mass = 3 };
+const char* filterModeName(FilterMode f);
+
 struct GridSpec {
   glm::vec3 origin{0.0f};  // corner of voxel (0,0,0), file/model space
   float voxel = 1.0f;      // voxel edge length
@@ -42,9 +45,16 @@ struct DetectParams {
   int minVoxels = 8;              // smaller connected components are dropped as noise
   float boundsPercentile = 0.5f;  // crop the grid to [p, 100-p] percentile of positions (ignores far floaters)
   bool occupancy = true;          // compare O = 1 - exp(-Phi) (true) or the raw density Phi (false)
-  bool antiAlias = true;          // add a voxel-sized low-pass filter to every Gaussian (mass preserving)
-  float cutoffSigma = 3.0f;       // evaluate each Gaussian out to this many standard deviations
+  // How each Gaussian is low-pass filtered to voxel scale before splatting (s = half a voxel):
+  //   Clamp     Sigma' = V max(Lambda, s^2) V^T, opacity kept: thin axes grow to voxel size, wide ones untouched
+  //   Dilate    Sigma' = Sigma + s^2 I, opacity kept (3DGS-style): every Gaussian grows, boxes get looser
+  //   Mass      Sigma + s^2 I with opacity * sqrt(det Sigma / det Sigma') (Mip-Splatting): thin opaque
+  //             surfaces almost vanish, so their removal goes undetected
+  //   None      no filter: Gaussians thinner than a voxel can fall between voxel centres
+  FilterMode filter = FilterMode::Clamp;
+  float cutoffSigma = 3.0f;  // evaluate each Gaussian out to this many standard deviations
   ExecMode mode = ExecMode::OpenMPAtomic;
+  int threads = 0;  // OpenMP threads for the parallel modes; 0 = all available
 };
 
 struct ChangeRegion {
@@ -56,9 +66,11 @@ struct ChangeRegion {
   int pairedWith = -1;       // for "moved": index of the matching added/removed region
   float matchCost = 0.0f;    // size + shape difference of that pair (lower = more alike)
   std::vector<float> shape;  // D1 shape distribution: histogram of voxel distances from the centroid
+  int componentId = -1;      // internal: connected-component id before filtering/sorting
 };
 
 struct DetectTimings {
+  double setup = 0;                                                    // grid bounds (milliseconds)
   double splatA = 0, splatB = 0, compare = 0, regions = 0, total = 0;  // milliseconds
   int threads = 1;
 };
@@ -67,6 +79,7 @@ struct DetectResult {
   GridSpec grid;
   std::vector<float> fieldA, fieldB;  // O (or Phi) for each scan, size grid.count()
   std::vector<int8_t> label;          // +1 added, -1 removed, 0 unchanged
+  std::vector<int32_t> regionId;      // index into `regions` for every voxel, -1 if none
   std::vector<ChangeRegion> regions;
   size_t changedVoxels = 0, occupiedVoxels = 0;
   DetectTimings timings;
@@ -74,6 +87,8 @@ struct DetectResult {
 };
 
 // Grid covering both scans (robust percentile bounds, padded), `resolution` voxels on the longest axis.
+// Percentiles are taken from an evenly strided sample of at most ~33k positions (exact for smaller scans);
+// the bounds only decide where the grid sits, so sampling is plenty accurate and keeps this step cheap.
 GridSpec makeGrid(const Gaussians& a, const Gaussians& b, int resolution, float boundsPercentile);
 
 // Kernel 1: accumulate the density Phi of `gs` into `field` (resized to grid.count()), then optionally map it

@@ -56,7 +56,7 @@ Strictly follow existing patterns to maintain consistency.
 - `assets/`: 3D models and textures.
 
 ## 🧪 Testing & Quality Assurance
-- **Tests:** Currently, there are no automated unit tests. Manual verification by running the app is required. If adding logic that requires automated testing, consider adding a `tests/` directory and integrating with CMake.
+- **Tests:** `make test` builds and runs `tests/test_scene_edit.cpp` (`./build/splatdiff_tests`). Add a test for any change to the detector or edits.
 - **Linting:** Ensure all code adheres to `.clang-format`.
 
 ## 🤖 Instructions for AI Agents

@@ -105,6 +105,74 @@ void symmetricEigen(const glm::mat3& m, glm::vec3& values, glm::mat3& vectors) {
     for (int c = 0; c < 3; ++c) vectors[c][r] = float(v[r][c]);  // column c = eigenvector c
 }
 
+void symmetricEigenFast(const glm::mat3& m, glm::vec3& values, glm::mat3& vectors) {
+  const double a00 = m[0][0], a11 = m[1][1], a22 = m[2][2];
+  const double a01 = 0.5 * (double(m[1][0]) + m[0][1]), a02 = 0.5 * (double(m[2][0]) + m[0][2]),
+               a12 = 0.5 * (double(m[2][1]) + m[1][2]);
+  const double p1 = a01 * a01 + a02 * a02 + a12 * a12;
+  const double q = (a00 + a11 + a22) / 3.0;
+  const double p2 = (a00 - q) * (a00 - q) + (a11 - q) * (a11 - q) + (a22 - q) * (a22 - q) + 2.0 * p1;
+  const double scale = std::max(std::fabs(a00), std::max(std::fabs(a11), std::fabs(a22))) + 1e-300;
+  if (p2 <= 1e-24 * scale * scale) {  // (near) isotropic: any basis works
+    values = glm::vec3(float(q));
+    vectors = glm::mat3(1.0f);
+    return;
+  }
+  // eigenvalues e0 >= e1 >= e2 (trigonometric solution of the characteristic cubic)
+  const double p = std::sqrt(p2 / 6.0);
+  const double b00 = (a00 - q) / p, b11 = (a11 - q) / p, b22 = (a22 - q) / p;
+  const double b01 = a01 / p, b02 = a02 / p, b12 = a12 / p;
+  double r = 0.5 * (b00 * (b11 * b22 - b12 * b12) - b01 * (b01 * b22 - b12 * b02) + b02 * (b01 * b12 - b11 * b02));
+  r = std::clamp(r, -1.0, 1.0);
+  const double phi = std::acos(r) / 3.0;
+  double e[3];
+  e[0] = q + 2.0 * p * std::cos(phi);
+  e[2] = q + 2.0 * p * std::cos(phi + 2.0943951023931957);  // + 2 pi / 3
+  e[1] = 3.0 * q - e[0] - e[2];
+
+  // eigenvector of the most isolated eigenvalue: cross product of two rows of (A - e I)
+  const int k = (e[0] - e[1] >= e[1] - e[2]) ? 0 : 2;
+  const glm::dvec3 r0(a00 - e[k], a01, a02), r1(a01, a11 - e[k], a12), r2(a02, a12, a22 - e[k]);
+  glm::dvec3 c[3] = {glm::cross(r0, r1), glm::cross(r0, r2), glm::cross(r1, r2)};
+  int best = 0;
+  for (int i = 1; i < 3; ++i)
+    if (glm::dot(c[i], c[i]) > glm::dot(c[best], c[best])) best = i;
+  glm::dvec3 vk = glm::normalize(c[best]);
+
+  // orthonormal basis (u, w) of the complement, then the exact 2x2 eigenproblem there
+  glm::dvec3 helper = std::fabs(vk.x) < 0.9 ? glm::dvec3(1, 0, 0) : glm::dvec3(0, 1, 0);
+  glm::dvec3 u = glm::normalize(glm::cross(vk, helper)), w = glm::cross(vk, u);
+  const glm::dmat3 A(a00, a01, a02, a01, a11, a12, a02, a12, a22);
+  const double muu = glm::dot(u, A * u), muw = glm::dot(u, A * w), mww = glm::dot(w, A * w);
+  const double theta = 0.5 * std::atan2(2.0 * muw, muu - mww);
+  glm::dvec3 v1 = std::cos(theta) * u + std::sin(theta) * w;
+  glm::dvec3 v2 = -std::sin(theta) * u + std::cos(theta) * w;
+  double l1 = glm::dot(v1, A * v1), l2 = glm::dot(v2, A * v2);
+  if (l1 < l2) std::swap(l1, l2), std::swap(v1, v2);
+
+  glm::dvec3 vec[3];
+  double val[3];
+  if (k == 0) {
+    vec[0] = vk, val[0] = glm::dot(vk, A * vk), vec[1] = v1, val[1] = l1, vec[2] = v2, val[2] = l2;
+  } else {
+    vec[0] = v1, val[0] = l1, vec[1] = v2, val[1] = l2, vec[2] = vk, val[2] = glm::dot(vk, A * vk);
+  }
+  values = glm::vec3(val[0], val[1], val[2]);
+  vectors = glm::mat3(glm::vec3(vec[0]), glm::vec3(vec[1]), glm::vec3(vec[2]));
+}
+
+glm::mat3 clampCovariance(const glm::mat3& cov, float minVariance) {
+  glm::vec3 lambda;
+  glm::mat3 V;
+  symmetricEigenFast(cov, lambda, V);
+  glm::vec3 grow = glm::max(glm::vec3(minVariance) - lambda, glm::vec3(0.0f));
+  if (grow.x == 0.0f && grow.y == 0.0f && grow.z == 0.0f) return cov;  // already wide enough
+  glm::mat3 out = cov;
+  for (int i = 0; i < 3; ++i)
+    if (grow[i] > 0.0f) out += grow[i] * glm::outerProduct(V[i], V[i]);
+  return out;
+}
+
 void decomposeCovariance(const glm::mat3& cov, glm::vec3& scale, glm::quat& rotation) {
   glm::vec3 values;
   glm::mat3 R;

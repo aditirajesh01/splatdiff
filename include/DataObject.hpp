@@ -81,9 +81,13 @@ class GaussianSplat {
   VBO vbo;
   EBO ebo;
   std::vector<GaussianSphere> spheres;
+  VBO tagVbo;  // one float per Gaussian: SplatDiff change tag (0 = unchanged), attribute location 5
 
   GaussianSplat(const std::vector<GaussianSphere>& spheres);
   ~GaussianSplat();
+
+  // Upload per-Gaussian change tags (same order as `spheres`); an empty vector clears them.
+  void setTags(const std::vector<float>& tags);
 
   // Re-upload `spheres` to the GPU after the CPU copy changed (size may grow or shrink).
   // Call sort() afterwards to refresh the draw order.

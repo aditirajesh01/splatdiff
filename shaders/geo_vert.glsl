@@ -5,6 +5,8 @@ layout(location = 1) in vec3 aColor;
 layout(location = 2) in float aOpacity;
 layout(location = 3) in vec3 aCovA;
 layout(location = 4) in vec3 aCovB;
+layout(location = 5) in float aTag;  // SplatDiff change tag: 0 unchanged, 1 removed, 2 added,
+                                     // 3 moved (from), 4 moved (to), 5 changed (mixed)
 
 uniform vec2 Resolution;
 uniform vec2 Focal;
@@ -16,6 +18,8 @@ uniform mat4 camMatrix;
 uniform vec3 BoxMin;
 uniform vec3 BoxMax;
 uniform int showSelectionBox;
+uniform int overlayMode;    // 1 = tint changed Gaussians by their change type
+uniform int dimUnchanged;   // 1 = grey out and fade Gaussians that did not change
 
 out vec2 GeoCenterPix;
 out float GeoRadius;
@@ -110,6 +114,19 @@ void main()
     GeoCov = vec3(cov2D.z, -cov2D.y, cov2D.x) * det_inv;
     GeoColor = aColor;
     GeoOpacity = aOpacity;
+
+    // SplatDiff change overlay (colours match the region boxes)
+    int tag = int(aTag + 0.5);
+    if (overlayMode == 1 && tag > 0) {
+        vec3 tagColors[6] = vec3[6](vec3(0.0), vec3(1.0, 0.15, 0.15), vec3(0.2, 1.0, 0.3),
+                                     vec3(1.0, 0.5, 0.05), vec3(1.0, 0.85, 0.1), vec3(1.0, 0.3, 1.0));
+        GeoColor = mix(aColor, tagColors[tag], 0.8);
+        GeoOpacity = max(aOpacity, 0.6);
+    } else if (dimUnchanged == 1 && tag == 0) {
+        float lum = dot(aColor, vec3(0.299, 0.587, 0.114));
+        GeoColor = mix(vec3(lum), aColor, 0.2) * 0.45;
+        GeoOpacity = aOpacity * 0.5;
+    }
     GeoScaleModif = 1. / scaleFactor;
 
     vec4 worldPos = modelMatrix * vec4(aPos, 1.0);

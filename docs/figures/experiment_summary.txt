@@ -1,0 +1,86 @@
+scan A: 132000 gaussians, scene size 7.826, OpenMP threads 8
+
+group       case           expect      found  regions    false      IoU     false%     ms   result
+stability   jitter         none       0 / 0         0        0     0.00    0.0000%     39     PASS
+stability   jitter_strong  none       0 / 0         0        0     0.00    0.0000%     40     PASS
+stability   split          none       0 / 0         0        0     0.00    0.0000%     44     PASS
+stability   prune          none       0 / 0         0        0     0.00    0.0000%     38     PASS
+stability   rescan_all     none       0 / 0         0        0     0.00    0.0000%     42     PASS
+appearance  colour_global  none       0 / 0         0        0     0.00    0.0000%     41     PASS
+appearance  colour_local   none       0 / 0         0        0     0.00    0.0000%    105     PASS
+real        delete         change     1 / 1         1        0     0.37    0.0000%    107     PASS
+real        move           change     2 / 2         2        0     0.27    0.0000%     41     PASS
+real        move_rotate    change     2 / 2         2        0     0.27    0.0000%     38     PASS
+real        duplicate      change     1 / 1         1        0     0.34    0.0000%     38     PASS
+real        small_move     change     2 / 2         2        0     0.10    0.0000%     39     PASS
+real        combined       change     4 / 4         4        0     0.34    0.0000%     44     PASS
+
+13 / 13 cases passed
+
+tau sweep...
+  tolerance 1  tau 0.05: detected 100%, false-change 0.0000%, false regions 0, IoU 0.40
+  tolerance 1  tau 0.10: detected 100%, false-change 0.0000%, false regions 0, IoU 0.40
+  tolerance 1  tau 0.15: detected 100%, false-change 0.0000%, false regions 0, IoU 0.37
+  tolerance 1  tau 0.20: detected 100%, false-change 0.0000%, false regions 0, IoU 0.37
+  tolerance 1  tau 0.25: detected 100%, false-change 0.0000%, false regions 0, IoU 0.36
+  tolerance 1  tau 0.30: detected 100%, false-change 0.0000%, false regions 0, IoU 0.36
+  tolerance 1  tau 0.35: detected 100%, false-change 0.0000%, false regions 0, IoU 0.34
+  tolerance 1  tau 0.40: detected 100%, false-change 0.0000%, false regions 0, IoU 0.32
+  tolerance 1  tau 0.50: detected 100%, false-change 0.0000%, false regions 0, IoU 0.32
+  tolerance 1  tau 0.60: detected 100%, false-change 0.0000%, false regions 0, IoU 0.32
+  tolerance 1  tau 0.70: detected 100%, false-change 0.0000%, false regions 0, IoU 0.31
+  tolerance 1  tau 0.80: detected 100%, false-change 0.0000%, false regions 0, IoU 0.30
+  tolerance 1  tau 0.90: detected 100%, false-change 0.0000%, false regions 0, IoU 0.30
+  tolerance 0  tau 0.05: detected 100%, false-change 21.3692%, false regions 130, IoU 0.09
+  tolerance 0  tau 0.10: detected 100%, false-change 7.4871%, false regions 24, IoU 0.21
+  tolerance 0  tau 0.15: detected 100%, false-change 3.0184%, false regions 24, IoU 0.39
+  tolerance 0  tau 0.20: detected 100%, false-change 0.9494%, false regions 7, IoU 0.42
+  tolerance 0  tau 0.25: detected 100%, false-change 0.2179%, false regions 0, IoU 0.52
+  tolerance 0  tau 0.30: detected 100%, false-change 0.0301%, false regions 0, IoU 0.53
+  tolerance 0  tau 0.35: detected 100%, false-change 0.0000%, false regions 0, IoU 0.53
+  tolerance 0  tau 0.40: detected 100%, false-change 0.0000%, false regions 0, IoU 0.53
+  tolerance 0  tau 0.50: detected 100%, false-change 0.0000%, false regions 0, IoU 0.52
+  tolerance 0  tau 0.60: detected 100%, false-change 0.0000%, false regions 0, IoU 0.48
+  tolerance 0  tau 0.70: detected 100%, false-change 0.0000%, false regions 0, IoU 0.45
+  tolerance 0  tau 0.80: detected 100%, false-change 0.0000%, false regions 0, IoU 0.44
+  tolerance 0  tau 0.90: detected 100%, false-change 0.0000%, false regions 0, IoU 0.42
+
+resolution sweep...
+  res  32: detected 75%, false regions 0, IoU 0.00, 32.3 ms
+  res  48: detected 100%, false regions 0, IoU 0.03, 31.7 ms
+  res  64: detected 100%, false regions 0, IoU 0.15, 32.3 ms
+  res  96: detected 100%, false regions 0, IoU 0.24, 35.9 ms
+  res 128: detected 100%, false regions 0, IoU 0.34, 41.7 ms
+  res 192: detected 100%, false regions 0, IoU 0.40, 79.4 ms
+  res 256: detected 100%, false regions 0, IoU 0.42, 143.0 ms
+
+thread scaling (best of 3)...
+  res  64 serial                   1 threads:    129.9 ms  speedup 1.00x
+  res  64 OpenMP (atomic)          1 threads:    137.8 ms  speedup 0.94x
+  res  64 OpenMP (atomic)          2 threads:     67.7 ms  speedup 1.92x
+  res  64 OpenMP (atomic)          4 threads:     36.2 ms  speedup 3.58x
+  res  64 OpenMP (atomic)          8 threads:     31.2 ms  speedup 4.16x
+  res  64 OpenMP (private grids)   1 threads:    126.8 ms  speedup 1.02x
+  res  64 OpenMP (private grids)   2 threads:     65.8 ms  speedup 1.98x
+  res  64 OpenMP (private grids)   4 threads:     34.5 ms  speedup 3.76x
+  res  64 OpenMP (private grids)   8 threads:     24.5 ms  speedup 5.30x
+  res 128 serial                   1 threads:    164.5 ms  speedup 1.00x
+  res 128 OpenMP (atomic)          1 threads:    167.1 ms  speedup 0.98x
+  res 128 OpenMP (atomic)          2 threads:     86.6 ms  speedup 1.90x
+  res 128 OpenMP (atomic)          4 threads:     46.4 ms  speedup 3.54x
+  res 128 OpenMP (atomic)          8 threads:     37.3 ms  speedup 4.41x
+  res 128 OpenMP (private grids)   1 threads:    164.8 ms  speedup 1.00x
+  res 128 OpenMP (private grids)   2 threads:     86.1 ms  speedup 1.91x
+  res 128 OpenMP (private grids)   4 threads:     45.9 ms  speedup 3.59x
+  res 128 OpenMP (private grids)   8 threads:     34.3 ms  speedup 4.80x
+  res 256 serial                   1 threads:    574.1 ms  speedup 1.00x
+  res 256 OpenMP (atomic)          1 threads:    562.1 ms  speedup 1.02x
+  res 256 OpenMP (atomic)          2 threads:    293.5 ms  speedup 1.96x
+  res 256 OpenMP (atomic)          4 threads:    152.5 ms  speedup 3.77x
+  res 256 OpenMP (atomic)          8 threads:    122.2 ms  speedup 4.70x
+  res 256 OpenMP (private grids)   1 threads:    551.8 ms  speedup 1.04x
+  res 256 OpenMP (private grids)   2 threads:    294.2 ms  speedup 1.95x
+  res 256 OpenMP (private grids)   4 threads:    164.3 ms  speedup 3.49x
+  res 256 OpenMP (private grids)   8 threads:    134.2 ms  speedup 4.28x
+
+CSV files in assets/experiments. Plot: python3 tools/plot_results.py assets/experiments

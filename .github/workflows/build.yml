@@ -1,0 +1,22 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake g++ libsdl2-dev libglew-dev libglm-dev nlohmann-json3-dev
+      - name: Build
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
+      - name: Unit tests
+        run: ./build/splatdiff_tests
+      - name: Experiment suite (quick)
+        run: |
+          python3 -m pip install --user numpy
+          python3 tools/make_synthetic_scene.py assets/synthetic_room.ply
+          ./build/splatdiff_experiments assets/synthetic_room.ply --out build/experiments --quick

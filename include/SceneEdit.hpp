@@ -34,6 +34,15 @@ void decomposeCovariance(const glm::mat3& cov, glm::vec3& scale, glm::quat& rota
 // Symmetric 3x3 eigen-decomposition: cov = V diag(values) V^T, columns of V are eigenvectors.
 void symmetricEigen(const glm::mat3& m, glm::vec3& values, glm::mat3& vectors);
 
+// Fast closed-form eigen-decomposition of a symmetric 3x3 matrix (trigonometric method for the eigenvalues,
+// then the best-conditioned eigenvector plus an exact 2x2 solve in its orthogonal complement). Same contract
+// as symmetricEigen, about 20x cheaper; used per Gaussian inside the detector's splat kernel.
+void symmetricEigenFast(const glm::mat3& m, glm::vec3& values, glm::mat3& vectors);
+
+// Raise every eigenvalue of `cov` to at least `minVariance`, keeping the eigenvectors:
+// Sigma' = V max(Lambda, minVariance) V^T. Thin axes grow, axes that are already wide are untouched.
+glm::mat3 clampCovariance(const glm::mat3& cov, float minVariance);
+
 // Apply an affine transform to one Gaussian: mu' = A mu + t, Sigma' = L Sigma L^T (L = linear part of A).
 void transformGaussian(GaussianSphere& g, const glm::mat4& affine);
 

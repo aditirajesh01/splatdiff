@@ -2,6 +2,9 @@
 
 #include <OPPCH.h>
 
+#include <cfloat>
+#include <filesystem>
+
 #include "ImGuiFileDialog.h"
 
 App::App(const float screenWidth, const float screenHeight, const std::string& initialPlyPath) {
@@ -25,8 +28,8 @@ App::App(const float screenWidth, const float screenHeight, const std::string& i
   glm::vec3 orientation = glm::vec3(-0.7f, -0.6f, 0.0f);
   camera = std::make_unique<Camera>(screenWidth, screenHeight, position, orientation);
   listener = std::make_unique<GhostCameraListener>(camera.get());
-  listener->onKeyUpCallback = [&](SDL_Keycode key) { splat->sort(getViewModelMatrix()); };
-  listener->onMouseLeftReleaseCallback = [&]() { splat->sort(getViewModelMatrix()); };
+  listener->onKeyUpCallback = [&](SDL_Keycode key) { sortVisible(); };
+  listener->onMouseLeftReleaseCallback = [&]() { sortVisible(); };
   camera->setEventListener(listener.get());
   splat->sort(getViewModelMatrix());
 
@@ -188,6 +191,27 @@ bool App::intersectRaySphere(const glm::vec3& rayOrigin, const glm::vec3& rayDir
 }
 
 void App::OnEvent(SDL_Event& event) {
+  // before/after divider: drag it with the left mouse button
+  if (splitView) {
+    float splitPx = dividerFraction * width;
+    if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT &&
+        std::fabs(event.button.x - splitPx) < 10.0f) {
+      draggingSplit = true;
+      return;
+    }
+    if (draggingSplit && event.type == SDL_MOUSEMOTION) {
+      dividerFraction = glm::clamp(event.motion.x / width, 0.02f, 0.98f);
+      return;
+    }
+    if (draggingSplit && event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT) {
+      draggingSplit = false;
+      return;
+    }
+  }
+  if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_h && !event.key.repeat) {
+    toggleUi();
+    return;
+  }
   if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_TAB && !event.key.repeat) {
     setShowB(!showB);  // flick between before and after
     return;
@@ -260,7 +284,7 @@ void App::OnEvent(SDL_Event& event) {
     }
 
   } else if (event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT) {
-    if (isRotating) splat->sort(getViewModelMatrix());
+    if (isRotating) sortVisible();
     isRotating = false;
     currentGizmoMode = GizmoMode::NONE;
   } else if (event.type == SDL_MOUSEMOTION) {
@@ -357,44 +381,25 @@ void App::OnRender() {
 
   camera->moveCamera();
 
-  // Use premultiplied alpha for Gaussian Splats
-  glEnable(GL_BLEND);
-  glDisable(GL_DEPTH_TEST);
-  glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-
-  splatShader->use();
-  glUniformMatrix4fv(glGetUniformLocation(splatShader->ID, "modelMatrix"), 1, GL_FALSE,
-                     glm::value_ptr(splatModelMatrix));
-  glUniform1f(glGetUniformLocation(splatShader->ID, "scaleFactor"), scaleFactor);
-  glUniform2f(glGetUniformLocation(splatShader->ID, "Resolution"), (float)width, (float)height);
-  glUniform2f(glGetUniformLocation(splatShader->ID, "Focal"), focal_x, focal_y);
-  glUniform2f(glGetUniformLocation(splatShader->ID, "TanFov"), tan_fovx, tan_fovy);
-  // calc box bounds location
-  glm::vec3 boxMin = glm::vec3(boxPosition[0] - boxSize[0], boxPosition[1] - boxSize[1], boxPosition[2] - boxSize[2]);
-  glm::vec3 boxMax = glm::vec3(boxPosition[0] + boxSize[0], boxPosition[1] + boxSize[1], boxPosition[2] + boxSize[2]);
-  glUniform3fv(glGetUniformLocation(splatShader->ID, "BoxMin"), 1, glm::value_ptr(boxMin));
-  glUniform3fv(glGetUniformLocation(splatShader->ID, "BoxMax"), 1, glm::value_ptr(boxMax));
-  glUniform1i(glGetUniformLocation(splatShader->ID, "showSelectionBox"), showSelectionBox ? 1 : 0);
-  camera->update(splatShader.get());
-  splat->draw(splatShader.get());
-
-  // Use standard alpha blending for GUI/Gizmos
-  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-  // SplatDiff: detected change regions and ground-truth boxes (file space, drawn with the model matrix)
-  if (showGroundTruth && !editLog.empty()) {
-    for (const auto& b : splatdiff::groundTruthBoxes(editLog)) drawBoxEdges(b.min, b.max, glm::vec3(0.9f));
-  }
-  if (showRegions && detection) {
-    for (const auto& r : detection->regions) {
-      glm::vec3 c(1.0f, 0.3f, 1.0f);  // changed (mixed)
-      if (r.type == "added") c = glm::vec3(0.3f, 1.0f, 0.4f);
-      if (r.type == "removed") c = glm::vec3(1.0f, 0.25f, 0.25f);
-      if (r.type == "moved (from)") c = glm::vec3(1.0f, 0.55f, 0.1f);
-      if (r.type == "moved (to)") c = glm::vec3(1.0f, 0.85f, 0.2f);
-      drawBoxEdges(r.min, r.max, c);
+  if (stereo.mode != StereoMode::Off) {
+    // VR / stereo: render the scene once per eye into its own framebuffer, then combine.
+    // Gizmos and the selection box are mono-only UI and are skipped here.
+    if (!stereoRenderer) stereoRenderer = std::make_unique<StereoRenderer>();
+    glm::ivec2 window{int(width), int(height)};
+    glm::ivec2 eye = StereoRenderer::eyeSize(stereo.mode, window);
+    for (int e = 0; e < 2; ++e) {
+      RenderView v;
+      v.size = eye;
+      stereoEyeView(stereo, e, camera->position, camera->orientation, camera->upVector(), camera->fovDegrees(),
+                    float(eye.x) / eye.y, camera->nearZ(), camera->farZ(), v.view, v.proj);
+      stereoRenderer->beginEye(e, eye);
+      renderScene(v);
     }
+    stereoRenderer->composite(stereo, window);
+    return;
   }
+
+  renderScene(mainView());
 
   if (showSelectionBox) {
     boxShader->use();
@@ -510,6 +515,102 @@ void App::OnRender() {
   glEnable(GL_DEPTH_TEST);
 }
 
+App::RenderView App::mainView() const {
+  RenderView v;
+  v.size = glm::ivec2(int(width), int(height));
+  v.view = glm::lookAt(camera->position, camera->position + camera->orientation, camera->upVector());
+  v.proj = glm::perspective(glm::radians(camera->fovDegrees()), width / height, camera->nearZ(), camera->farZ());
+  return v;
+}
+
+void App::applyView(Shader* shader) const {
+  glUniformMatrix4fv(glGetUniformLocation(shader->ID, "viewMatrix"), 1, GL_FALSE, glm::value_ptr(currentView.view));
+  glUniformMatrix4fv(glGetUniformLocation(shader->ID, "camMatrix"), 1, GL_FALSE,
+                     glm::value_ptr(currentView.proj * currentView.view));
+}
+
+void App::renderScene(const RenderView& v) {
+  currentView = v;
+  glViewport(0, 0, v.size.x, v.size.y);
+  // SplatDiff view: splats (one scan, or A | B split at the divider), then the change volume on top
+  if (!volumeOnly) {
+    if (splitView) {
+      int splitPx = int(dividerFraction * v.size.x);
+      glEnable(GL_SCISSOR_TEST);
+      glScissor(0, 0, splitPx, v.size.y);
+      drawSplats(sceneA.get());
+      glScissor(splitPx, 0, v.size.x - splitPx, v.size.y);
+      drawSplats(sceneB.get());
+      glDisable(GL_SCISSOR_TEST);
+    } else {
+      drawSplats(splat);
+    }
+  }
+  if ((showVolume || volumeOnly) && volumeView && detection) {
+    volumeView->draw(v.proj, v.view, splatModelMatrix, glm::vec2(v.size));
+  }
+
+  // Use standard alpha blending for GUI/Gizmos
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+  // SplatDiff: detected change regions and ground-truth boxes (file space, drawn with the model matrix)
+  if (showGroundTruth && !editLog.empty()) {
+    for (const auto& b : splatdiff::groundTruthBoxes(editLog)) drawBoxEdges(b.min, b.max, glm::vec3(0.9f));
+  }
+  if (showRegions && detection) {
+    for (const auto& r : detection->regions) {
+      glm::vec3 c(1.0f, 0.3f, 1.0f);  // changed (mixed)
+      if (r.type == "added") c = glm::vec3(0.3f, 1.0f, 0.4f);
+      if (r.type == "removed") c = glm::vec3(1.0f, 0.25f, 0.25f);
+      if (r.type == "moved (from)") c = glm::vec3(1.0f, 0.55f, 0.1f);
+      if (r.type == "moved (to)") c = glm::vec3(1.0f, 0.85f, 0.2f);
+      drawBoxEdges(r.min, r.max, c);
+    }
+  }
+}
+
+void App::drawSplats(GaussianSplat* scene) {
+  // Use premultiplied alpha for Gaussian Splats
+  glEnable(GL_BLEND);
+  glDisable(GL_DEPTH_TEST);
+  glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+
+  splatShader->use();
+  glUniformMatrix4fv(glGetUniformLocation(splatShader->ID, "modelMatrix"), 1, GL_FALSE,
+                     glm::value_ptr(splatModelMatrix));
+  glUniform1f(glGetUniformLocation(splatShader->ID, "scaleFactor"), scaleFactor);
+  // Pinhole focal length in pixels for this viewport. The same focal applies to x and y (square pixels);
+  // the original code used the window *width* for focal_y, which stretched every splat vertically by the
+  // aspect ratio (1.78x on a 16:9 window).
+  const glm::vec2 res(currentView.size);
+  const float tanHalfFovY = std::tan(glm::radians(camera->fovDegrees()) * 0.5f);
+  const float focal = res.y / (2.0f * tanHalfFovY);
+  glUniform2f(glGetUniformLocation(splatShader->ID, "Resolution"), res.x, res.y);
+  glUniform2f(glGetUniformLocation(splatShader->ID, "Focal"), focal, focal);
+  glUniform2f(glGetUniformLocation(splatShader->ID, "TanFov"), tanHalfFovY * res.x / res.y, tanHalfFovY);
+  // calc box bounds location
+  glm::vec3 boxMin = glm::vec3(boxPosition[0] - boxSize[0], boxPosition[1] - boxSize[1], boxPosition[2] - boxSize[2]);
+  glm::vec3 boxMax = glm::vec3(boxPosition[0] + boxSize[0], boxPosition[1] + boxSize[1], boxPosition[2] + boxSize[2]);
+  glUniform3fv(glGetUniformLocation(splatShader->ID, "BoxMin"), 1, glm::value_ptr(boxMin));
+  glUniform3fv(glGetUniformLocation(splatShader->ID, "BoxMax"), 1, glm::value_ptr(boxMax));
+  glUniform1i(glGetUniformLocation(splatShader->ID, "showSelectionBox"), showSelectionBox ? 1 : 0);
+  glUniform1i(glGetUniformLocation(splatShader->ID, "overlayMode"), (overlay && detection) ? 1 : 0);
+  glUniform1i(glGetUniformLocation(splatShader->ID, "dimUnchanged"), (dimUnchanged && detection) ? 1 : 0);
+  applyView(splatShader.get());
+  scene->draw(splatShader.get());
+}
+
+void App::sortVisible() {
+  if (!camera) return;
+  glm::mat4 vm = getViewModelMatrix();
+  if (splitView) {
+    sceneA->sort(vm);
+    sceneB->sort(vm);
+  } else {
+    splat->sort(vm);
+  }
+}
+
 void App::OnImGuiRender() {
   ImGui::Text("Camera Position:");
   ImGui::Text("X:%.2f Y:%.2f Z:%.2f", camera->position.x, camera->position.y, camera->position.z);
@@ -571,7 +672,7 @@ void App::resetScanB() {
 void App::setShowB(bool show) {
   showB = show;
   splat = showB ? sceneB.get() : sceneA.get();
-  if (camera) splat->sort(getViewModelMatrix());
+  if (camera) sortVisible();
 }
 
 void App::loadScanB(const std::string& path) {
@@ -601,7 +702,7 @@ void App::OnSplatDiffImGui() {
     if (ImGui::RadioButton("Scan A (before)", !showB)) setShowB(false);
     ImGui::SameLine();
     if (ImGui::RadioButton("Scan B (after)", showB)) setShowB(true);
-    ImGui::TextDisabled("Tab switches A/B");
+    ImGui::TextDisabled("Tab switches A/B, H hides the UI");
     ImGui::Text("A: %zu gaussians", sceneA->spheres.size());
     ImGui::Text("B: %zu gaussians, %zu edits", sceneB->spheres.size(), editLog.size());
 
@@ -689,6 +790,128 @@ void App::OnSplatDiffImGui() {
     ImGui::TextDisabled("red = real change, blue = must be ignored");
   }
 
+  // ---- View ----
+  ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+  if (ImGui::CollapsingHeader("View")) {
+    ImGui::Checkbox("Change overlay", &overlay);
+    ImGui::SameLine();
+    ImGui::Checkbox("Dim unchanged", &dimUnchanged);
+    if (ImGui::Checkbox("Before | after split", &splitView)) sortVisible();
+    if (splitView) ImGui::SliderFloat("Divider", &dividerFraction, 0.02f, 0.98f);
+    ImGui::Checkbox("Change volume", &showVolume);
+    ImGui::SameLine();
+    ImGui::Checkbox("Volume only", &volumeOnly);
+    if (volumeView && (showVolume || volumeOnly)) {
+      ImGui::SliderFloat("Volume opacity", &volumeView->opacity, 0.1f, 5.0f);
+      ImGui::SliderFloat("Volume threshold", &volumeView->threshold, 0.0f, 0.9f);
+      ImGui::Checkbox("Show occupied space", &volumeView->showContext);
+    }
+    if (!detection) ImGui::TextDisabled("Run change detection to enable overlay and volume");
+    ImGui::Checkbox("Slice view", &showSlice);
+    if (showSlice && detection && volumeView) {
+      const char* axes[] = {"X (side)", "Y (top-down)", "Z (front)"};
+      bool changed = ImGui::Combo("Slice axis", &sliceAxis, axes, 3);
+      changed |= ImGui::SliderFloat("Slice position", &slicePosition, 0.0f, 1.0f);
+      if (changed) volumeView->updateSlice(*detection, sliceAxis, slicePosition);
+      glm::ivec2 sz = volumeView->sliceSize();
+      float w = ImGui::GetContentRegionAvail().x;
+      float h = std::min(w * sz.y / std::max(sz.x, 1), 360.0f);
+      ImGui::Image((ImTextureID)(intptr_t)volumeView->sliceTexture(), ImVec2(h * sz.x / std::max(sz.y, 1), h));
+      ImGui::TextDisabled("grey = occupied, red = removed, green = added");
+    }
+  }
+
+  // ---- Stereo / VR ----
+  if (ImGui::CollapsingHeader("Stereo / VR")) {
+    int m = int(stereo.mode);
+    const char* stereoModes[] = {"Off (mono)", "Anaglyph red/cyan (colour)", "Anaglyph red/cyan (grey)", "Side-by-side",
+                                 "Cardboard (side-by-side + lens)"};
+    ImGui::Combo("Stereo mode", &m, stereoModes, 5);
+    stereo.mode = StereoMode(m);
+    ImGui::SliderFloat("Eye separation", &stereo.eyeSeparation, 0.0f, 0.6f, "%.3f");
+    ImGui::SliderFloat("Convergence", &stereo.convergence, 0.5f, 30.0f, "%.2f");
+    if (ImGui::Button("Converge on scene centre") && detection) {
+      glm::vec3 centre = detection->grid.origin + 0.5f * glm::vec3(detection->grid.dims) * detection->grid.voxel;
+      glm::vec3 world = glm::vec3(splatModelMatrix * glm::vec4(centre, 1.0f));
+      stereo.convergence = std::max(0.5f, glm::dot(world - camera->position, glm::normalize(camera->orientation)));
+    }
+    ImGui::Checkbox("Toe-in (wrong, compare)", &stereo.toeIn);
+    ImGui::SameLine();
+    ImGui::Checkbox("Swap eyes", &stereo.swapEyes);
+    if (stereo.mode == StereoMode::Cardboard) {
+      ImGui::SliderFloat("Lens k1", &stereo.k1, 0.0f, 0.6f);
+      ImGui::SliderFloat("Lens k2", &stereo.k2, 0.0f, 0.6f);
+    }
+    ImGui::TextDisabled("Objects at the convergence distance sit at screen depth;");
+    ImGui::TextDisabled("nearer ones pop out, farther ones sink in.");
+    if (stereo.mode == StereoMode::SideBySide) ImGui::TextDisabled("Cross-eye viewing: tick Swap eyes.");
+  }
+
+  // ---- Experiments ----
+  if (!expRows.empty()) ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+  if (ImGui::CollapsingHeader("Experiments")) {
+    ImGui::TextDisabled("Runs on scan A with the detection settings below.");
+    ImGui::TextDisabled("The window pauses while a run is in progress.");
+    ImGui::InputInt("Seed", &expSeed);
+    if (ImGui::Button("Run all cases")) runExperimentCases();
+    ImGui::SameLine();
+    if (ImGui::Button("Tau sweep")) runTauSweep();
+    ImGui::SameLine();
+    if (ImGui::Button("Thread scaling")) runThreadSweep();
+    if (ImGui::Button("Export CSV")) exportExperiments();
+    if (!expStatus.empty()) ImGui::TextWrapped("%s", expStatus.c_str());
+
+    if (!expRows.empty() &&
+        ImGui::BeginTable("cases", 5,
+                          ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingFixedFit)) {
+      ImGui::TableSetupColumn("case", ImGuiTableColumnFlags_WidthStretch);
+      ImGui::TableSetupColumn("found");
+      ImGui::TableSetupColumn("IoU");
+      ImGui::TableSetupColumn("result");
+      ImGui::TableSetupColumn("");
+      ImGui::TableHeadersRow();
+      for (size_t i = 0; i < expRows.size(); ++i) {
+        const auto& r = expRows[i];
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::Text("%s", r.name.c_str());
+        if (ImGui::IsItemHovered() && i < expCases.size())
+          ImGui::SetTooltip("%s: %s", r.group.c_str(), expCases[i].description.c_str());
+        ImGui::TableNextColumn();
+        if (r.expectChange)
+          ImGui::Text("%d/%d", r.gtDetected, r.gtBoxes);
+        else
+          ImGui::Text("%d reg", r.regions);
+        ImGui::TableNextColumn();
+        if (r.expectChange)
+          ImGui::Text("%.2f", r.meanIoU);
+        else
+          ImGui::TextDisabled("-");
+        ImGui::TableNextColumn();
+        ImGui::TextColored(r.pass ? ImVec4(0.4f, 0.9f, 0.4f, 1) : ImVec4(1, 0.35f, 0.35f, 1), r.pass ? "PASS" : "FAIL");
+        ImGui::TableNextColumn();
+        ImGui::PushID(int(i));
+        if (ImGui::SmallButton("Show")) showExperimentCase(i);
+        ImGui::PopID();
+      }
+      ImGui::EndTable();
+    }
+    if (!expTau.empty()) {
+      std::vector<float> iou, fcr;
+      for (const auto& p : expTau)
+        if (p.mode == expTau.front().mode) iou.push_back(p.meanIoU), fcr.push_back(100.0f * p.falseChangeRate);
+      char overlay[64];
+      std::snprintf(overlay, sizeof(overlay), "IoU vs tau %.2f..%.2f", expTau.front().x, expTau[iou.size() - 1].x);
+      ImGui::PlotLines("##iou", iou.data(), int(iou.size()), 0, overlay, 0.0f, 1.0f, ImVec2(-1, 60));
+      ImGui::PlotLines("##fcr", fcr.data(), int(fcr.size()), 0, "false-change % vs tau", 0.0f, FLT_MAX, ImVec2(-1, 60));
+    }
+    if (!expThreads.empty()) {
+      double serial = expThreads.front().totalMs;
+      for (const auto& p : expThreads)
+        ImGui::Text("%-24s %d thr  %7.1f ms  x%.2f", p.mode.c_str(), p.threads, p.totalMs, serial / p.totalMs);
+    }
+  }
+
   // ---- Change detection ----
   ImGui::SetNextItemOpen(true, ImGuiCond_Once);
   if (!ImGui::CollapsingHeader("Change detection")) return;
@@ -698,7 +921,10 @@ void App::OnSplatDiffImGui() {
   ImGui::SliderInt("Min region voxels", &detectParams.minVoxels, 1, 100);
   ImGui::Checkbox("Occupancy 1-exp(-Phi)", &detectParams.occupancy);
   ImGui::SameLine();
-  ImGui::Checkbox("Anti-alias", &detectParams.antiAlias);
+  int filter = int(detectParams.filter);
+  const char* filters[] = {"none", "clamp thin axes", "dilate all axes", "mass-preserving"};
+  ImGui::SetNextItemWidth(150);
+  if (ImGui::Combo("Filter", &filter, filters, 4)) detectParams.filter = FilterMode(filter);
   int mode = int(detectParams.mode);
   const char* modes[] = {"Serial", "OpenMP (atomic)", "OpenMP (private grids)"};
   if (ImGui::Combo("Execution", &mode, modes, 3)) detectParams.mode = ExecMode(mode);
@@ -742,7 +968,7 @@ void App::OnSplatDiffImGui() {
 
 void App::drawBoxEdges(const glm::vec3& mn, const glm::vec3& mx, const glm::vec3& colour) {
   boxShader->use();
-  camera->update(boxShader.get());
+  applyView(boxShader.get());
   glUniformMatrix4fv(glGetUniformLocation(boxShader->ID, "modelMatrix"), 1, GL_FALSE, glm::value_ptr(splatModelMatrix));
   glUniform3fv(glGetUniformLocation(boxShader->ID, "Color"), 1, glm::value_ptr(colour));
   glm::vec3 centre = 0.5f * (mn + mx), half = 0.5f * (mx - mn);
@@ -767,6 +993,10 @@ void App::runDetection() {
       splatdiff::detectChanges(sceneA->spheres, sceneB->spheres, detectParams));
   haveEvaluation = !editLog.empty();
   if (haveEvaluation) evaluation = splatdiff::evaluate(*detection, splatdiff::groundTruthBoxes(editLog));
+  updateChangeTags();
+  if (!volumeView) volumeView = std::make_unique<VolumeView>();
+  volumeView->upload(*detection);
+  volumeView->updateSlice(*detection, sliceAxis, slicePosition);
   const auto& t = detection->timings;
   std::cout << "[detect] " << detection->regions.size() << " regions, " << detection->changedVoxels
             << " changed voxels, " << t.total << " ms (" << splatdiff::execModeName(detectParams.mode) << ")"
@@ -794,5 +1024,115 @@ void App::setCamera(const glm::vec3& position, const glm::vec3& lookAt) {
   camera->orientation = glm::normalize(lookAt - position);
   camera->viewMatrix =
       glm::lookAt(camera->position, camera->position + camera->orientation, glm::vec3(0.0f, 1.0f, 0.0f));
-  splat->sort(getViewModelMatrix());  // depth order for the new viewpoint
+  sortVisible();  // depth order for the new viewpoint
+}
+
+// Tag every Gaussian with the type of the change region it sits in, so the splat shader can tint it.
+// Scan A only shows "disappearing" changes (removed, moved from), scan B only "appearing" ones.
+void App::updateChangeTags() {
+  if (!detection) return;
+  const auto& d = *detection;
+  const auto& g = d.grid;
+  auto regionAt = [&](const glm::vec3& p) {
+    glm::ivec3 c = glm::ivec3(glm::floor((p - g.origin) / g.voxel));
+    int best = -1;
+    for (int dz = -1; dz <= 1 && best < 0; ++dz)  // own voxel first, then the 26 neighbours
+      for (int dy = -1; dy <= 1 && best < 0; ++dy)
+        for (int dx = -1; dx <= 1 && best < 0; ++dx) {
+          glm::ivec3 q = c + glm::ivec3(dx, dy, dz);
+          if (glm::any(glm::lessThan(q, glm::ivec3(0))) || glm::any(glm::greaterThanEqual(q, g.dims))) continue;
+          best = d.regionId[g.index(q.x, q.y, q.z)];
+        }
+    if (best < 0 && glm::all(glm::greaterThanEqual(c, glm::ivec3(0))) && glm::all(glm::lessThan(c, g.dims)))
+      best = d.regionId[g.index(c.x, c.y, c.z)];
+    return best;
+  };
+  auto tagFor = [&](const std::string& type, bool inA) -> float {
+    if (type == "changed") return 5;
+    if (inA) return type == "removed" ? 1 : (type == "moved (from)" ? 3 : 0);
+    return type == "added" ? 2 : (type == "moved (to)" ? 4 : 0);
+  };
+  for (int s = 0; s < 2; ++s) {
+    GaussianSplat* scene = s == 0 ? sceneA.get() : sceneB.get();
+    std::vector<float> tags(scene->spheres.size(), 0.0f);
+#pragma omp parallel for schedule(static)
+    for (long i = 0; i < long(tags.size()); ++i) {
+      int r = regionAt(scene->spheres[i].position);
+      if (r >= 0) tags[i] = tagFor(d.regions[r].type, s == 0);
+    }
+    scene->setTags(tags);
+  }
+}
+
+// ---------------- SplatDiff: experiments (milestone 5) ----------------
+
+void App::runExperimentCases() {
+  using namespace splatdiff;
+  if (sceneA->spheres.empty()) return;
+  expCases = standardCases(sceneA->spheres, uint32_t(expSeed));
+  expRows.clear();
+  int passed = 0;
+  for (const auto& c : expCases) {
+    expRows.push_back(runCase(sceneA->spheres, c, detectParams));
+    passed += expRows.back().pass;
+  }
+  expStatus = std::to_string(passed) + " / " + std::to_string(expRows.size()) +
+              " cases passed. Hover a case for "
+              "details, Show loads it as scan B.";
+  std::cout << "[experiments] " << expStatus << std::endl;
+}
+
+void App::showExperimentCase(size_t index) {
+  using namespace splatdiff;
+  if (index >= expCases.size()) return;
+  Gaussians b;
+  std::vector<EditRecord> log;
+  runCase(sceneA->spheres, expCases[index], detectParams, &b, &log);
+  sceneB = std::make_unique<GaussianSplat>(b);
+  editLog = log;
+  scanBPath = "./assets/case_" + expCases[index].name + ".ply";
+  setShowB(true);
+  runDetection();
+}
+
+// the sweeps run on the "combined" case (real edits + lighting + re-scan noise)
+static bool combinedCase(const splatdiff::Gaussians& a, uint32_t seed, splatdiff::Gaussians& b,
+                         std::vector<splatdiff::EditRecord>& log) {
+  for (const auto& c : splatdiff::standardCases(a, seed))
+    if (c.name == "combined") {
+      b = a;
+      c.make(b, log);
+      return true;
+    }
+  return false;
+}
+
+void App::runTauSweep() {
+  using namespace splatdiff;
+  Gaussians b;
+  std::vector<EditRecord> log;
+  if (sceneA->spheres.empty() || !combinedCase(sceneA->spheres, uint32_t(expSeed), b, log)) return;
+  expTau = sweepTau(sceneA->spheres, b, log, detectParams,
+                    {0.05f, 0.1f, 0.15f, 0.2f, 0.25f, 0.3f, 0.35f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f, 0.9f});
+  expStatus = "Tau sweep done (combined case, current settings).";
+}
+
+void App::runThreadSweep() {
+  using namespace splatdiff;
+  Gaussians b;
+  std::vector<EditRecord> log;
+  if (sceneA->spheres.empty() || !combinedCase(sceneA->spheres, uint32_t(expSeed), b, log)) return;
+  std::vector<int> threads;
+  for (int t = 1; t <= maxThreads(); t *= 2) threads.push_back(t);
+  expThreads = sweepThreads(sceneA->spheres, b, detectParams, {detectParams.resolution}, threads, 1);
+  expStatus = "Thread scaling done at resolution " + std::to_string(detectParams.resolution) + ".";
+}
+
+void App::exportExperiments() {
+  using namespace splatdiff;
+  std::filesystem::create_directories("./assets/experiments_viewer");
+  if (!expRows.empty()) writeCasesCsv("./assets/experiments_viewer/cases.csv", expRows);
+  if (!expTau.empty()) writeSweepCsv("./assets/experiments_viewer/tau_sweep.csv", expTau);
+  if (!expThreads.empty()) writeSweepCsv("./assets/experiments_viewer/threads.csv", expThreads);
+  expStatus = "Exported to assets/experiments_viewer/ (plot with tools/plot_results.py).";
 }
