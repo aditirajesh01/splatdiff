@@ -9,6 +9,7 @@ Use #define GLM_ENABLE_EXPERIMENTAL before including it, if you really want to u
 #include <GL/glew.h>
 #include <SDL2/SDL.h>
 
+#include <algorithm>
 #include <fstream>
 #include <functional>
 #include <glm/glm.hpp>
