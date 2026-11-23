@@ -11,6 +11,7 @@
 #include <sstream>
 #include <stdexcept>
 
+#include "Random.hpp"
 #include "happly.h"
 
 namespace splatdiff {
@@ -261,16 +262,17 @@ EditRecord duplicateRegion(Gaussians& gs, const Region& region, const glm::vec3&
 }
 
 EditRecord jitterAll(Gaussians& gs, float posSigma, float scaleSigma, uint32_t seed) {
-  std::mt19937 rng(seed);
-  std::normal_distribution<float> posNoise(0.0f, std::max(posSigma, 0.0f));
-  std::normal_distribution<float> scaleNoise(0.0f, std::max(scaleSigma, 0.0f));
+  PortableRng rng(seed);
+  const float ps = std::max(posSigma, 0.0f), ss = std::max(scaleSigma, 0.0f);
+  auto posNoise = [&]() { return rng.normal(0.0f, ps); };
+  auto scaleNoise = [&]() { return rng.normal(0.0f, ss); };
   for (auto& g : gs) {
-    if (posSigma > 0) g.position += glm::vec3(posNoise(rng), posNoise(rng), posNoise(rng));
+    if (posSigma > 0) g.position += glm::vec3(posNoise(), posNoise(), posNoise());
     if (scaleSigma > 0) {
       glm::vec3 s;
       glm::quat q;
       decomposeCovariance(covariance(g), s, q);
-      s *= glm::exp(glm::vec3(scaleNoise(rng), scaleNoise(rng), scaleNoise(rng)));
+      s *= glm::exp(glm::vec3(scaleNoise(), scaleNoise(), scaleNoise()));
       setCovariance(g, covarianceFromScaleRotation(s, q));
     }
   }
@@ -283,14 +285,13 @@ EditRecord jitterAll(Gaussians& gs, float posSigma, float scaleSigma, uint32_t s
 }
 
 EditRecord splitRandom(Gaussians& gs, float fraction, uint32_t seed) {
-  std::mt19937 rng(seed);
-  std::uniform_real_distribution<float> uni(0.0f, 1.0f);
+  PortableRng rng(seed);
   const float shrink = 0.6f;  // child std-dev along the split axis, relative to the parent
   size_t n = gs.size();
   int splits = 0;
   gs.reserve(n + size_t(n * fraction * 1.2f) + 16);
   for (size_t i = 0; i < n; ++i) {
-    if (uni(rng) >= fraction) continue;
+    if (rng.uniform() >= fraction) continue;
     GaussianSphere& g = gs[i];
     glm::vec3 values;
     glm::mat3 V;
@@ -325,11 +326,10 @@ EditRecord splitRandom(Gaussians& gs, float fraction, uint32_t seed) {
 }
 
 EditRecord pruneFaint(Gaussians& gs, float fraction, float maxOpacity, uint32_t seed) {
-  std::mt19937 rng(seed);
-  std::uniform_real_distribution<float> uni(0.0f, 1.0f);
+  PortableRng rng(seed);
   size_t before = gs.size();
   auto it = std::remove_if(gs.begin(), gs.end(),
-                           [&](const GaussianSphere& g) { return g.opacity < maxOpacity && uni(rng) < fraction; });
+                           [&](const GaussianSphere& g) { return g.opacity < maxOpacity && rng.uniform() < fraction; });
   gs.erase(it, gs.end());
   EditRecord r;
   r.type = "prune";

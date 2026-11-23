@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
-#include <random>
+#include <limits>
+
+#include "Random.hpp"
 
 namespace splatdiff {
 
@@ -16,25 +18,23 @@ float percentile(std::vector<float> v, float pct) {
   return v[k];
 }
 
-glm::vec3 randomDirection(std::mt19937& rng) {
-  std::normal_distribution<float> n(0.0f, 1.0f);
-  glm::vec3 d(n(rng), n(rng), n(rng));
+glm::vec3 randomDirection(PortableRng& rng) {
+  glm::vec3 d(rng.normal(), rng.normal(), rng.normal());
   return glm::length(d) > 1e-6f ? glm::normalize(d) : glm::vec3(1, 0, 0);
 }
 
 // Pick a cube region around a random Gaussian that holds a reasonable chunk of the scene and keeps away from
 // regions picked before (so edits do not interfere with each other's ground truth).
-Region pickRegion(const Gaussians& a, const SceneScale& sc, std::mt19937& rng, float halfFraction,
+Region pickRegion(const Gaussians& a, const SceneScale& sc, PortableRng& rng, float halfFraction,
                   const std::vector<Region>& avoid) {
   Region best;
   best.halfSize = glm::vec3(halfFraction * sc.extent);
   int bestCount = -1;
-  std::uniform_int_distribution<size_t> pick(0, a.empty() ? 0 : a.size() - 1);
   const int minCount = 200, maxCount = int(0.15 * a.size());
   for (int attempt = 0; attempt < 300 && !a.empty(); ++attempt) {
     Region r;
     r.halfSize = best.halfSize;
-    r.center = a[pick(rng)].position;
+    r.center = a[rng.index(a.size())].position;
     if (glm::any(glm::lessThan(r.center, sc.lo)) || glm::any(glm::greaterThan(r.center, sc.hi))) continue;
     bool clash = false;
     for (const auto& o : avoid) clash |= glm::length(o.center - r.center) < 3.5f * r.halfSize.x;
@@ -91,13 +91,7 @@ std::vector<ExperimentCase> standardCases(const Gaussians& a, uint32_t seed) {
   const SceneScale sc = measureScene(a);
   const float E = sc.extent;
   const float h = 0.06f * E;  // half-size of edited regions: about an object in a room-sized scene
-  std::mt19937 rng(seed);
-  std::vector<Region> chosen;
-  Region r1 = pickRegion(a, sc, rng, 0.06f, chosen);
-  chosen.push_back(r1);
-  Region r2 = pickRegion(a, sc, rng, 0.06f, chosen);
-  chosen.push_back(r2);
-  Region r3 = pickRegion(a, sc, rng, 0.06f, chosen);
+  PortableRng rng(seed);
   // Move/copy directions stay parallel to the "ground": scenes have no labelled up axis, but the thinnest
   // extent of a scan is almost always vertical (rooms, tabletops, streets), so that component is zeroed.
   const glm::vec3 ext = sc.hi - sc.lo;
@@ -107,7 +101,46 @@ std::vector<ExperimentCase> standardCases(const Gaussians& a, uint32_t seed) {
     d[upAxis] = 0.0f;
     return glm::length(d) > 1e-4f ? glm::normalize(d) : glm::vec3(upAxis == 0 ? 0 : 1, 0, upAxis == 0 ? 1 : 0);
   };
-  const glm::vec3 d1 = groundDirection(), d2 = groundDirection();
+  auto countIn = [&](const glm::vec3& centre) {
+    Region q;
+    q.center = centre;
+    q.halfSize = glm::vec3(h);
+    int n = 0;
+    for (const auto& g : a) n += q.contains(g.position);
+    return n;
+  };
+  // A move or copy is only a real change if it lands somewhere empty: copying a patch of floor onto more floor
+  // changes nothing. Pick the region and a ground direction together so the destination holds as little of the
+  // scene as possible relative to the source, stays inside the scene and keeps clear of the other edits.
+  std::vector<Region> chosen;
+  auto pickMovable = [&](float distance, glm::vec3& dirOut) {
+    Region best = pickRegion(a, sc, rng, 0.06f, chosen);
+    glm::vec3 bestDir = groundDirection();
+    float bestRatio = std::numeric_limits<float>::max();
+    for (int attempt = 0; attempt < 24 && bestRatio > 0.25f; ++attempt) {
+      Region r = attempt == 0 ? best : pickRegion(a, sc, rng, 0.06f, chosen);
+      const int source = countIn(r.center);
+      if (source == 0) continue;
+      for (int k = 0; k < 12; ++k) {
+        const glm::vec3 d = groundDirection();
+        const glm::vec3 dst = r.center + d * distance;
+        bool ok = !glm::any(glm::lessThan(dst, sc.lo)) && !glm::any(glm::greaterThan(dst, sc.hi));
+        for (const auto& o : chosen) ok &= glm::length(o.center - dst) >= 3.5f * h;
+        if (!ok) continue;
+        const float ratio = float(countIn(dst)) / float(source);
+        if (ratio < bestRatio) bestRatio = ratio, best = r, bestDir = d;
+      }
+    }
+    dirOut = bestDir;
+    return best;
+  };
+  Region r1 = pickRegion(a, sc, rng, 0.06f, chosen);
+  chosen.push_back(r1);
+  glm::vec3 d1, d2;
+  Region r2 = pickMovable(2.5f * h, d1);
+  chosen.push_back(r2);
+  chosen.push_back(Region{r2.center + d1 * (2.5f * h), r2.halfSize});
+  Region r3 = pickMovable(3.0f * h, d2);
   const float op30 = sc.opacity30;
   const uint32_t s = seed;
 

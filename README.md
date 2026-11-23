@@ -147,10 +147,10 @@ viewer's **Experiments** panel, where **Show** loads any case.
 
   | filter (`--filter`) | demo IoU | false change on re-scans | suite | thin-floor hole |
   |---|---|---|---|---|
-  | clamp (default) | 0.58 | 0 | 13/13 | found |
+  | clamp (default) | 0.59 | 0 | 13/13 | found |
   | dilate | 0.47 | 0 | 13/13 | found |
   | mass | 0.54 | 0 | 13/13 | missed |
-  | none | 0.64 | 1,085 / 11,123 voxels | 12/13 | n/a |
+  | none | 0.63 | 442 voxels, 10 false regions | 12/13 | n/a |
 
 * **Honest serial baseline.** Serial mode pins OpenMP to one thread for the whole pipeline. An early version left
   parts of it parallel, which understated every speedup. A test now checks this.
